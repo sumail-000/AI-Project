@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GSMArena Data Scraper</title>
+    <title>Data Scraper</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.datatables.net/1.11.5/css/dataTables.bootstrap5.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -390,7 +390,7 @@
     <!-- Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
-            <a class="navbar-brand neon-text" href="/">GSMArena Data Scraper</a>
+            <a class="navbar-brand neon-text" href="/">Mobile Data Scraper</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
@@ -408,7 +408,7 @@
     </nav>
 
     <div class="container mt-5">
-        <h1 class="mb-4 neon-flicker">GSMArena Data Scraper</h1>
+        <h1 class="mb-4 neon-flicker">Mobile Data Scraper</h1>
         
         <!-- Brand Selection Section -->
         <div class="brand-selection">
@@ -498,6 +498,48 @@
                         <div class="stats-item">Progress: <span id="brandProgressText">0%</span></div>
                     </div>
 
+                    <!-- Progress Visualization Section -->
+                    <div class="visualization-section mb-4">
+                        <div class="card">
+                            <div class="card-body">
+                                <h4>Extraction Metrics</h4>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="time-estimate mb-3">
+                                            <h5>Estimated Time Remaining</h5>
+                                            <div class="timeline-bar progress">
+                                                <div id="timelineProgress" class="progress-bar" role="progressbar" style="width: 0%"></div>
+                                            </div>
+                                            <div class="d-flex justify-content-between">
+                                                <small id="startTime">Start</small>
+                                                <small id="estimatedEndTime">Estimated End</small>
+                                            </div>
+                                            <div class="text-center mt-2">
+                                                <span id="timeRemaining" class="badge bg-info">Calculating...</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="extraction-rate mb-3">
+                                            <h5>Real-time Extraction Rate</h5>
+                                            <div class="rate-display text-center">
+                                                <span id="currentRate" class="display-6">0</span>
+                                                <span class="text-muted">devices/minute</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <canvas id="speedGraph" height="200"></canvas>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <canvas id="extractionBreakdown" height="200"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="console-output" id="console"></div>
                 </div>
 
@@ -536,7 +578,159 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
+        // Visualization variables
+        let startTimestamp;
+        let speedChart;
+        let breakdownChart;
+        let extractionRates = [];
+        let successCount = 0;
+        let failureCount = 0;
+        let lastDeviceCount = 0;
+        let rateUpdateInterval;
+
+        // Initialize charts
+        function initializeCharts() {
+            // Speed Graph
+            const speedCtx = document.getElementById('speedGraph').getContext('2d');
+            speedChart = new Chart(speedCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Extraction Speed',
+                        data: [],
+                        borderColor: '#39FF14',
+                        backgroundColor: 'rgba(57, 255, 20, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Extraction Speed Over Time',
+                            color: '#39FF14'
+                        },
+                        legend: {
+                            labels: {
+                                color: '#39FF14'
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { color: '#39FF14' },
+                            grid: { color: 'rgba(57, 255, 20, 0.1)' }
+                        },
+                        y: {
+                            ticks: { color: '#39FF14' },
+                            grid: { color: 'rgba(57, 255, 20, 0.1)' }
+                        }
+                    }
+                }
+            });
+
+            // Extraction Breakdown
+            const breakdownCtx = document.getElementById('extractionBreakdown').getContext('2d');
+            breakdownChart = new Chart(breakdownCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Successful', 'Failed'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#39FF14', '#FF10F0']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Extraction Success Rate',
+                            color: '#39FF14'
+                        },
+                        legend: {
+                            labels: {
+                                color: '#39FF14'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Update extraction rate
+        function updateExtractionRate() {
+            const currentDeviceCount = parseInt(devicesProcessed.textContent);
+            const devicesDelta = currentDeviceCount - lastDeviceCount;
+            lastDeviceCount = currentDeviceCount;
+
+            // Calculate rate (per minute)
+            const rate = devicesDelta * 6; // Multiply by 6 since we update every 10 seconds
+            document.getElementById('currentRate').textContent = rate.toFixed(1);
+
+            // Update speed graph
+            const timestamp = new Date().toLocaleTimeString();
+            speedChart.data.labels.push(timestamp);
+            speedChart.data.datasets[0].data.push(rate);
+
+            // Keep only last 10 data points
+            if (speedChart.data.labels.length > 10) {
+                speedChart.data.labels.shift();
+                speedChart.data.datasets[0].data.shift();
+            }
+            speedChart.update();
+        }
+
+        // Update time remaining
+        function updateTimeRemaining() {
+            if (!startTimestamp) return;
+
+            const now = new Date();
+            const elapsedTime = (now - startTimestamp) / 1000; // in seconds
+            const progress = parseInt(progressText.textContent);
+
+            if (progress > 0) {
+                const totalEstimatedTime = (elapsedTime * 100) / progress;
+                const remainingTime = totalEstimatedTime - elapsedTime;
+
+                // Update timeline
+                document.getElementById('timelineProgress').style.width = progress + '%';
+                document.getElementById('startTime').textContent = startTimestamp.toLocaleTimeString();
+                document.getElementById('estimatedEndTime').textContent = 
+                    new Date(startTimestamp.getTime() + (totalEstimatedTime * 1000)).toLocaleTimeString();
+
+                // Format remaining time
+                const hours = Math.floor(remainingTime / 3600);
+                const minutes = Math.floor((remainingTime % 3600) / 60);
+                const seconds = Math.floor(remainingTime % 60);
+                const timeString = `${hours}h ${minutes}m ${seconds}s remaining`;
+                document.getElementById('timeRemaining').textContent = timeString;
+            }
+        }
+
+        // Start monitoring
+        function startMonitoring() {
+            startTimestamp = new Date();
+            document.getElementById('startTime').textContent = startTimestamp.toLocaleTimeString();
+            rateUpdateInterval = setInterval(() => {
+                updateExtractionRate();
+                updateTimeRemaining();
+            }, 10000); // Update every 10 seconds
+        }
+
+        // Stop monitoring
+        function stopMonitoring() {
+            clearInterval(rateUpdateInterval);
+        }
+
+        // Initialize charts when page loads
+        document.addEventListener('DOMContentLoaded', initializeCharts);
+
         const scanButton = document.getElementById('scanButton');
         const startButton = document.getElementById('startButton');
         const incrementalUpdateButton = document.getElementById('incrementalUpdateButton');
@@ -933,7 +1127,8 @@
                     if (data.is_incremental) {
                         addConsoleMessage('Incremental update completed!', 'success');
                     } else {
-                        addConsoleMessage('Data extraction completed!', 'success');
+                        logger.success("Data extraction completed successfully!");
+                        stopMonitoring();
                     }
                     
                     // Re-enable buttons
